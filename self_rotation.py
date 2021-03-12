@@ -4,13 +4,14 @@ import torch.utils as utils
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 import torchvision
-import prepare_for_cifar10 as pf
+import prepare_for_dataset as pf
 import resnet
 import argparse
 import os
 import time
 import rotation_loss
 from pdb import set_trace as bp
+import math
 
 model_names = sorted(name for name in resnet.__dict__
     if name.islower() and not name.startswith("__")
@@ -18,10 +19,11 @@ model_names = sorted(name for name in resnet.__dict__
                      and callable(resnet.__dict__[name]))
   #CUDA_VISIBLE_DEVICES=0,1,2,3 python self_rotation.py --arch resnetself --save-dir ./save_dir/
 parser = argparse.ArgumentParser(description='Propert ResNets for CIFAR10 in pytorch')
-parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet32',           #metavar : description
+parser.add_argument('--arch', '-a', metavar='ARCH', default='resnetself',           #metavar : description
                     choices=model_names,
                     help='model architecture: ' + ' | '.join(model_names) +
-                    ' (default: resnet32)')
+                    ' (default: resnetself)')
+
 parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('-b', '--batch-size', default=128, type=int,
@@ -42,13 +44,23 @@ parser.add_argument('--save-every', dest='save_every',
                     type=int, default=10)
 parser.add_argument('--range-of-lr', nargs='+', type=int,help='1234 1234 1234',default=[100,150])       #--range-of-lr 1234 1234 1234
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
-                    help='manual epoch number (useful on restarts)')        #체크포인트에서 load할때 필요                    
-parser.add_argument('--rotation-var',default='rotation_2')
+                    help='manual epoch number (useful on restarts)')        #체크포인트에서 load할때 필요 
+
+parser.add_argument('--dataset',default='cifar10')
+parser.add_argument('--major',type=float,default=False)
+parser.add_argument('--location',default='next')   #previous,next,neither
+parser.add_argument('--rotation-var',default=False) #rotation_loss function
+parser.add_argument('--major-type',default=False)
+
+
+parser.add_argument('--rotation-noise',default=False)
 
 best_prec1 = 0
+args = parser.parse_args()
 def main():
+    
     global args,best_prec1
-    args = parser.parse_args()
+    
     if args.arch == 'resnetself':
         rotation = True
     else:
@@ -60,30 +72,49 @@ def main():
     if not os.path.exists(args.save_dir):     #./save_dir/
         os.makedirs(args.save_dir)
     start_time = time.strftime('%Y-%m-%d %I:%M:%S %p', time.localtime(time.time()+32400))
-    if not os.path.exists('./log_file'):
-        os.makedirs('./log_file')
-    file = open('./log_file/'+start_time+'.txt','w')
+    if not os.path.exists('./log_file2'):
+        os.makedirs('./log_file2')
+    #file = open('./log_file2/'+start_time+'.txt','w')
+    code_name = [args.major,args.location,args.major_type,args.dataset,args.arch,args.rotation_var]
+    while False in code_name:
+        code_name.remove(False)
+    for i in range(len(code_name)):
+        code_name[i] = str(code_name[i])
+       
+    code_name = '-'.join(code_name)
+    file = open('./log_file2/'+code_name+'.txt','w')
     file.write('architecture: {0}\n'
                 'total epochs: {1}\n'
                 'batch size: {2}\n'
                 'start learning rate: {3}\n'
                 'range of learning rate: {4}\n'
-                'rotation: {5}\n'.format(
+                'rotation: {5}\n'
+                'rotation-noise: {6}\n'
+                'major: {7}\n'
+                'location: {8}\n'
+                'major_type: {9}\n'
+                'dataset: {10}\n'.format(
                     args.arch,
                     args.epochs,
                     args.batch_size,
                     args.lr,
                     args.range_of_lr,
-                    args.rotation_var
+                    args.rotation_var,
+                    args.rotation_noise,
+                    args.major,
+                    args.location,
+                    args.major_type,
+                    args.dataset
                 ))
     file.close()
 
 
     
-    train_loader,val_loader = pf.prepare_dataset(batch=args.batch_size)
-
+    train_loader,val_loader = pf.__dict__[args.dataset](batch=args.batch_size)
     
-    model = nn.DataParallel(resnet.__dict__[args.arch]())
+
+    model = nn.DataParallel(resnet.__dict__[args.arch](num_classes=int(args.dataset[5:])))
+    
     model.cuda()
     
     
@@ -108,11 +139,11 @@ def main():
         
         
         
-        train(train_loader, model, criterion, optimizer, epoch, rotation,rotation_var=args.rotation_var,start_time=start_time)
+        train(train_loader, model, criterion, optimizer, epoch, rotation,rotation_var=args.rotation_var,start_time=start_time,rotation_noise=args.rotation_noise,code_name=code_name)
         scheduler.step()
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, optimizer,criterion,rotation,start_time=start_time)
+        prec1 = validate(val_loader, model, optimizer,criterion,rotation,start_time=start_time,code_name=code_name)
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -133,10 +164,10 @@ def main():
 
     
     if args.evaluate:
-        validate(val_loader, model, criterion)
+        validate(val_loader, model, optimizer,criterion,rotation,start_time=start_time,code_name=code_name)
         return
 
-def train(train_loader, model, criterion, optimizer, epoch,rotation,rotation_var,start_time):
+def train(train_loader, model, criterion, optimizer, epoch,rotation,rotation_var,start_time,rotation_noise,code_name):
     """
         Run one train epoch
     """ 
@@ -153,17 +184,83 @@ def train(train_loader, model, criterion, optimizer, epoch,rotation,rotation_var
         target_var = target
 
         if rotation==True: 
-            input_var,target_rot,target_var = rotation_loss.__dict__[args.rotation_var](input_var,target_var)  
-            optimizer.zero_grad()
-            output, output_rot = model(input_var)
-            loss = criterion(output,target_var) + torch.sqrt(regression_loss(output_rot,target_rot))
-            output, output_rot = output.float(), output_rot.float()
-            prec1 = accuracy(output.data, target_var)[0]
-            loss.backward()
-            optimizer.step()
-            loss = loss.float()
-            acc.update(prec1.item(), input_var.size(0))    
-            losses.update(loss.item(), input_var.size(0))
+            if args.rotation_var  == 'rotation_2':
+                input_var,target_rot,target_var = rotation_loss.__dict__[args.rotation_var](input_var,target_var,rotation_noise)  
+                optimizer.zero_grad()
+                output, output_rot = model(input_var)
+                loss = criterion(output,target_var) + torch.sqrt(regression_loss(output_rot,target_rot))
+                output, output_rot = output.float(), output_rot.float()
+                prec1 = accuracy(output.data, target_var)[0]
+                loss.backward()
+                optimizer.step()
+                loss = loss.float()
+                acc.update(prec1.item(), input_var.size(0))    
+                losses.update(loss.item(), input_var.size(0))
+            elif args.rotation_var  == 'rotation_4':
+                input_var,target_rot,target_var = rotation_loss.__dict__[args.rotation_var](input_var,target_var,rotation_noise)  
+                optimizer.zero_grad()
+                output, output_rot = model(input_var)
+                loss = criterion(output,target_var) + criterion(output_rot,target_rot)
+                output, output_rot = output.float(), output_rot.float()
+                prec1 = accuracy(output.data, target_var)[0]
+                loss.backward()
+                optimizer.step()
+                loss = loss.float()
+                acc.update(prec1.item(), input_var.size(0))    
+                losses.update(loss.item(), input_var.size(0))                    
+            
+            elif args.rotation_var == 'rotation_2_symmetry_major_different_with_epoch':
+                if args.major_type == 'linear':
+                    major = 0.25 + 0.75/args.epochs*epoch
+                elif args.major_type == 'exponential':
+                    major = math.exp(math.log(0.25)/args.epochs*(args.epochs-epoch))
+                input_var,target_rot,target_var = rotation_loss.__dict__['rotation_2_symmetry_noise'](input_var,target_var,major,args.location)  
+                optimizer.zero_grad()
+                output, output_rot = model(input_var)
+                loss = criterion(output,target_var) + torch.sqrt(regression_loss(output_rot,target_rot))
+                output, output_rot = output.float(), output_rot.float()
+                prec1 = accuracy(output.data, target_var)[0]
+                loss.backward()
+                optimizer.step()
+                loss = loss.float()
+                acc.update(prec1.item(), input_var.size(0))    
+                losses.update(loss.item(), input_var.size(0))
+
+            elif args.rotation_var == 'rotation_2_pair_major_different_with_epoch':
+                if args.major_type == 'linear':
+                    major = 0.5 + 0.5/args.epochs*epoch
+                elif args.major_type == 'exponential':
+                    major = math.exp(math.log(0.5)/args.epochs*(args.epochs-epoch))
+                input_var,target_rot,target_var = rotation_loss.__dict__['rotation_2_pair_noise'](input_var,target_var,major,args.location)  
+                optimizer.zero_grad()
+                output, output_rot = model(input_var)
+                loss = criterion(output,target_var) + torch.sqrt(regression_loss(output_rot,target_rot))
+                output, output_rot = output.float(), output_rot.float()
+                prec1 = accuracy(output.data, target_var)[0]
+                loss.backward()
+                optimizer.step()
+                loss = loss.float()
+                acc.update(prec1.item(), input_var.size(0))    
+                losses.update(loss.item(), input_var.size(0))
+
+
+
+            else:
+                input_var,target_rot,target_var = rotation_loss.__dict__[args.rotation_var](input_var,target_var,args.major,args.location)  
+                optimizer.zero_grad()
+                output, output_rot = model(input_var)
+                loss = criterion(output,target_var) + torch.sqrt(regression_loss(output_rot,target_rot))
+                output, output_rot = output.float(), output_rot.float()
+                prec1 = accuracy(output.data, target_var)[0]
+                loss.backward()
+                optimizer.step()
+                loss = loss.float()
+                acc.update(prec1.item(), input_var.size(0))    
+                losses.update(loss.item(), input_var.size(0))
+
+
+
+
         else: 
 
             output = model(input_var)
@@ -180,7 +277,7 @@ def train(train_loader, model, criterion, optimizer, epoch,rotation,rotation_var
         # measure elapsed time
         tm = time.localtime(time.time())
         string = time.strftime('%Y-%m-%d %I:%M:%S %p', tm)
-        file = open('./log_file/'+start_time+'.txt','a')
+        file = open('./log_file2/'+code_name+'.txt','a')
         if i % 50 == 0:
             print('{0} -'
                   ' Epoch: [{1}][{2}/{3}] -'
@@ -203,7 +300,7 @@ def train(train_loader, model, criterion, optimizer, epoch,rotation,rotation_var
           .format(acc=acc))
     file.close()
 
-def validate(val_loader, model,optimizer,criterion,rotation,start_time):
+def validate(val_loader, model,optimizer,criterion,rotation,start_time,code_name):
     """
     Run evaluation
     """
@@ -239,7 +336,7 @@ def validate(val_loader, model,optimizer,criterion,rotation,start_time):
             # measure elapsed time
             tm = time.localtime(time.time())
             string = time.strftime('%Y-%m-%d %I:%M:%S %p', tm)
-            file = open('./log_file/'+start_time+'.txt','a')
+            file = open('./log_file2/'+code_name+'.txt','a')
             if i % 50 == 0:
                 print('{0} -'
                     ' Epoch: [{1}/{2}] -'

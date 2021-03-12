@@ -1,0 +1,11 @@
+architecture: resnetself
+total epochs: 200
+batch size: 128
+start learning rate: 0.1
+range of learning rate: [100, 150]
+rotation: rotation_2_stochastic_pair_noise
+rotation-noise: False
+major: 0.9
+location: neither
+major_type: False
+dataset: cifar100
