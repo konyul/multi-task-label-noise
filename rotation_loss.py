@@ -18,7 +18,7 @@ def pair(batch_data,batch_target,major,location):
     targets_r = torch.randint(0,4,(n,))
     targets_r_zero = torch.zeros(n,4).scatter(1,torch.zeros(n,).view(-1,1).long(),1)
     targets_rot = torch.zeros(n,4).scatter(1,targets_r.view(-1,1).long(),major)              # major를  define
-
+    
     targets_r_sub = torch.zeros(targets_r.size())
     
     if location == 'next':
@@ -107,7 +107,7 @@ def original(batch_data,batch_target,major,location):
     targets_rot = targets_rot.cuda()
     return result_input,targets_rot,targets_cls
 
-def rotation_4(batch_data,batch_target,rotation_noise):
+def rotation_4(batch_data,batch_target,major,location):
     n = batch_data.shape[0]
     size = batch_data.shape[1:]
     result_input = torch.stack([torch.rot90(batch_data, k, (2, 3)) for k in range(4)], 1).view(-1, *size)
