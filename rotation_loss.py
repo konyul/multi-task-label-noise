@@ -11,10 +11,6 @@ __all__ = ['original','rotation_4','pair','symmetry']
 def pair(batch_data,batch_target,major,location):
     n = batch_data.shape[0]
     rotated_images=[]
-    if major == 'dirichlet':
-        dirichlet_distribution = torch.distributions.dirichlet.Dirichlet(torch.tensor([major,major]))
-        dirichlet_sample = dirichlet_distribution.sample()
-        major,small = float(max(dirichlet_distribution)),float(min(dirichlet_distribution))
     targets_r = torch.randint(0,4,(n,))
     targets_r_zero = torch.zeros(n,4).scatter(1,torch.zeros(n,).view(-1,1).long(),1)
     targets_rot = torch.zeros(n,4).scatter(1,targets_r.view(-1,1).long(),major)              # major를  define

@@ -50,14 +50,15 @@ parser.add_argument('--arch', '-a',required=True, metavar='ARCH', default='resne
                     choices=model_names,
                     help='model architecture: ' + ' | '.join(model_names) +
                     ' (default: resnetself)')
-parser.add_argument('--auxiliary',required=True,default=False) #rotation
-parser.add_argument('--augmentation',required=True,type=int,default=False) # 4 or 2
+parser.add_argument('--auxiliary',required=True,default=False) #rotation color exemplar      if joint, rotation_color
+parser.add_argument('--augmentation',required=True,type=int,default=False) # 4 or 2 in rotation, 3 6 2 in color permutation
 parser.add_argument('--noise',required=True,action='store_true') # store_true
+
 parser.add_argument('--noise-type',required=True,default=False) # pair symmetry 
-parser.add_argument('--major-function',required=True,default=False) # default increasing decreasing dirichlet
-parser.add_argument('--location',required=True,default=False)   #previous,next,neither stochastic
-parser.add_argument('--major',required=True,default=False) # float linear exponential
-parser.add_argument('--loss',default=False) # softmax or False
+parser.add_argument('--major-function',required=True,default=False) # default linearly_increasing linearly_decreasing exponentially_increasing exponentially_decreasing dirichlet
+parser.add_argument('--location',required=True,default=False)   #previous,next,neither stochastic   pair에만 해당
+parser.add_argument('--major',required=True,default=False) # float     in linear or exponential case, where to start where to end
+parser.add_argument('--loss',default='mseloss') # softmax or mseloss
 
 
 
@@ -91,11 +92,22 @@ def main():
         for i in range(len(log_rotation_directory)):
             log_rotation_directory[i] = str(log_rotation_directory[i])
         log_rotation_directory = '/'.join(log_rotation_directory)    
-            
+    
+    if args.auxiliary == 'color':
+        log_rotation_directory = [args.augmentation,args.noise,args.noise_type,args.location,args.major_function,args.major]
+        while False in log_rotation_directory:
+            log_rotation_directory.remove(False)
+        for i in range(len(log_rotation_directory)):
+            log_rotation_directory[i] = str(log_rotation_directory[i])
+        log_rotation_directory = '/'.join(log_rotation_directory)
+    
+
+
+
     log_all_directory = './logs/'+log_directory +'/'+ log_rotation_directory+'/'
 
 
-    start_time = time.strftime('%Y-%m-%d %I:%M:%S %p', time.localtime(time.time()+32400))
+    start_time = time.strftime('%Y-%m-%d %I:%M:%S %p', time.localtime(time.time()))
     if not os.path.exists(log_all_directory):
         os.makedirs(log_all_directory)
     file = open(log_all_directory+start_time+'.txt','w')
@@ -207,7 +219,7 @@ def train(train_loader, model, criterion, optimizer,epoch,auxiliary,augmentation
     regression_loss = nn.MSELoss().cuda()
     # switch to train mode
     model.train()
-
+    location_seperated = major_function.find("_")
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         target = target.cuda()
@@ -219,56 +231,58 @@ def train(train_loader, model, criterion, optimizer,epoch,auxiliary,augmentation
                 if noise == True:
                     if noise_type == 'pair':
                         if major_function == 'default':
-                            
-                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location) 
-                        elif major_function == 'increasing':
-                            if args.major == 'linear':
-                                major = 0.7 + 0.3/args.epochs*epoch
-                            elif args.major == 'exponential':
-                                major = math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
-                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location)                                 
+                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary) 
 
-                        elif major_function == 'decreasing':
-                            if args.major == 'linear':
-                                major = 1 - 0.3/args.epochs*epoch
-                            elif args.major == 'exponential':
-                                major = 1.7 - math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
-                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location)     
+                        elif major_function[location_seperated+1:] == 'increasing':
+                            if major_function[:location_seperated] == 'linearly':
+                                major = args.major + (1-args.major)/args.epochs*epoch
+                            elif major_function[:location_seperated] == 'exponentially':
+                                major = math.exp(math.log(args.major)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary)                                 
+
+                        elif major_function[location_seperated+1:] == 'decreasing':
+                            if major_function[:location_seperated] == 'linearly':
+                                major = 1 - (1-args.major)/args.epochs*epoch
+                            elif major_function[:location_seperated] == 'exponentially':
+                                major = 1+args.major - math.exp(math.log(args.major)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary)     
                         
                         elif major_function == 'dirichlet':
                             dirichlet_distribution = torch.distributions.dirichlet.Dirichlet(torch.tensor([major,major]))
                             dirichlet_sample = dirichlet_distribution.sample()
                             major,small = float(max(dirichlet_sample)),float(min(dirichlet_sample))
 
-                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location)
+                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary)
                          
                     elif noise_type == 'symmetry':
                         if major_function == 'default':
-                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location) 
-                        elif major_function == 'increasing':
-                            if args.major == 'linear':
-                                major = 0.7 + 0.3/args.epochs*epoch
-                            elif args.major == 'exponential':
-                                major = math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
-                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location)                                 
+                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location,auxiliary) 
 
-                        elif major_function == 'decreasing':
-                            if args.major == 'linear':
-                                major = 1 - 0.3/args.epochs*epoch
-                            elif args.major == 'exponential':
-                                major = 1.7 - math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
-                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location)    
+                        elif major_function[location_seperated+1:] == 'increasing':
+                            if major_function[:location_seperated] == 'linearly':
+                                major = args.major + (1-args.major)/args.epochs*epoch
+                            elif major_function[:location_seperated] == 'exponentially':
+                                major = math.exp(math.log(args.major)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location,auxiliary)                                 
 
+                        elif major_function[location_seperated+1:] == 'decreasing':
+                            if major_function[:location_seperated] == 'linearly':
+                                major = 1 - (1-args.major)/args.epochs*epoch
+                            elif major_function[:location_seperated] == 'exponentially':
+                                major = 1+args.major - math.exp(math.log(args.major)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location,auxiliary)     
+                        
+                        
                     
                 elif noise == False:
-                    input_var,target_rot,target_var = rotation_loss.__dict__['original'](input_var,target_var,major,location)  
+                    input_var,target_rot,target_var = rotation_loss.__dict__['rotation_without_noise'](input_var,target_var,major,location)  
 
                 optimizer.zero_grad()
                 output, output_rot = model(input_var)
                 if args.loss == 'softmax':
                     soft = F.log_softmax(output_rot,dim=1)
                     loss = criterion(output,target_var) + torch.mean(-torch.sum(target_rot*soft,dim=1))
-                else:
+                elif args.loss == 'mseloss':
                     loss = criterion(output,target_var) + torch.sqrt(regression_loss(output_rot,target_rot))
                 
                 output, output_rot = output.float(), output_rot.float()
@@ -298,6 +312,179 @@ def train(train_loader, model, criterion, optimizer,epoch,auxiliary,augmentation
                 acc.update(prec1.item(), input_var.size(0))
                 losses.update(loss.item(), input_var.size(0))                    
            
+        elif auxiliary == 'color':
+            if augmentation == 2:
+                if noise == True:
+                    if noise_type == 'pair':
+                        if major_function == 'default':
+                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary) 
+                        elif major_function == 'increasing':
+                            if args.major == 'linear':
+                                major = 0.7 + 0.3/args.epochs*epoch
+                            elif args.major == 'exponential':
+                                major = math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary)                                 
+
+                        elif major_function == 'decreasing':
+                            if args.major == 'linear':
+                                major = 1 - 0.3/args.epochs*epoch
+                            elif args.major == 'exponential':
+                                major = 1.7 - math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary)     
+                        
+                        elif major_function == 'dirichlet':
+                            dirichlet_distribution = torch.distributions.dirichlet.Dirichlet(torch.tensor([major,major]))
+                            dirichlet_sample = dirichlet_distribution.sample()
+                            major,small = float(max(dirichlet_sample)),float(min(dirichlet_sample))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary)
+                         
+                    elif noise_type == 'symmetry':
+                        if major_function == 'default':
+                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location,auxiliary) 
+                        elif major_function == 'increasing':
+                            if args.major == 'linear':
+                                major = 0.7 + 0.3/args.epochs*epoch
+                            elif args.major == 'exponential':
+                                major = math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location,auxiliary)                                 
+
+                        elif major_function == 'decreasing':
+                            if args.major == 'linear':
+                                major = 1 - 0.3/args.epochs*epoch
+                            elif args.major == 'exponential':
+                                major = 1.7 - math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location,auxiliary)    
+
+                elif noise == False:
+                    input_var,target_rot,target_var = rotation_loss.__dict__['color_without_noise'](input_var,target_var,major,location)
+
+                optimizer.zero_grad()
+                output, output_rot = model(input_var)
+                if args.loss == 'softmax':
+                    soft = F.log_softmax(output_rot,dim=1)
+                    loss = criterion(output,target_var) + torch.mean(-torch.sum(target_rot*soft,dim=1))
+                elif args.loss == 'mseloss':
+                    loss = criterion(output,target_var) + torch.sqrt(regression_loss(output_rot,target_rot))
+                
+                output, output_rot = output.float(), output_rot.float()
+                prec1 = accuracy(output.data, target_var)[0]
+                prec_rot = accuracy(output_rot.data,torch.argmax(target_rot,dim=1))[0]
+                loss.backward()
+                optimizer.step()
+                loss = loss.float()
+                acc.update(prec1.item(), input_var.size(0))    
+                acc_rot.update(prec_rot.item(),input_var.size(0))
+                losses.update(loss.item(), input_var.size(0))
+
+            elif augmentation == 6:
+                input_var,target_rot,target_var = rotation_loss.__dict__['color_6'](input_var,target_var,major,location)  
+                optimizer.zero_grad()
+                output, output_rot = model(input_var)
+                loss = criterion(output,target_var) + criterion(output_rot,target_rot)
+                output, output_rot = output.float(), output_rot.float()
+                prec1 = accuracy(output.data, target_var)[0]
+                prec_rot = accuracy(output_rot.data,torch.argmax(target_rot,dim=1))[0]
+                acc_rot.update(prec_rot.item(),input_var.size(0))    
+                loss.backward()
+                optimizer.step()
+                loss = loss.float()
+                acc.update(prec1.item(), input_var.size(0))
+                losses.update(loss.item(), input_var.size(0)) 
+            elif augmentation == 3:
+                input_var,target_rot,target_var = rotation_loss.__dict__['color_3'](input_var,target_var,major,location)  
+                optimizer.zero_grad()
+                output, output_rot = model(input_var)
+                loss = criterion(output,target_var) + criterion(output_rot,target_rot)
+                output, output_rot = output.float(), output_rot.float()
+                prec1 = accuracy(output.data, target_var)[0]
+                prec_rot = accuracy(output_rot.data,torch.argmax(target_rot,dim=1))[0]
+                acc_rot.update(prec_rot.item(),input_var.size(0))    
+                loss.backward()
+                optimizer.step()
+                loss = loss.float()
+                acc.update(prec1.item(), input_var.size(0))
+                losses.update(loss.item(), input_var.size(0)) 
+
+        elif auxiliary == 'rotation_color' or auxiliary == 'color_rotation':
+            if augmentation == 2:
+                if noise == True:
+                    if noise_type == 'pair':
+                        if location == 'stochastic':
+                            if major_function == 'default':
+                                input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary) 
+                            elif major_function == 'increasing':
+                                if args.major == 'linear':
+                                    major = 0.7 + 0.3/args.epochs*epoch
+                                elif args.major == 'exponential':
+                                    major = math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
+                                input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary)                                 
+
+                            elif major_function == 'decreasing':
+                                if args.major == 'linear':
+                                    major = 1 - 0.3/args.epochs*epoch
+                                elif args.major == 'exponential':
+                                    major = 1.7 - math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
+                                input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary)     
+                            
+                            elif major_function == 'dirichlet':
+                                dirichlet_distribution = torch.distributions.dirichlet.Dirichlet(torch.tensor([major,major]))
+                                dirichlet_sample = dirichlet_distribution.sample()
+                                major,small = float(max(dirichlet_sample)),float(min(dirichlet_sample))
+                                input_var,target_rot,target_var = rotation_loss.__dict__['pair'](input_var,target_var,major,location,auxiliary)
+                        else:
+                            raise Exception('location : only stochastic')
+                    elif noise_type == 'symmetry':
+                        if major_function == 'default':
+                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location,auxiliary) 
+                        elif major_function == 'increasing':
+                            if args.major == 'linear':
+                                major = 0.7 + 0.3/args.epochs*epoch
+                            elif args.major == 'exponential':
+                                major = math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location,auxiliary)                                 
+
+                        elif major_function == 'decreasing':
+                            if args.major == 'linear':
+                                major = 1 - 0.3/args.epochs*epoch
+                            elif args.major == 'exponential':
+                                major = 1.7 - math.exp(math.log(0.7)/args.epochs*(args.epochs-epoch))
+                            input_var,target_rot,target_var = rotation_loss.__dict__['symmetry'](input_var,target_var,major,location,auxiliary) 
+
+                elif noise == False:
+                    input_var,target_rot,target_var = rotation_loss.__dict__['joint_without_noise'](input_var,target_var,major,location)
+                optimizer.zero_grad()
+                output, output_rot = model(input_var)
+                if args.loss == 'softmax':
+                    soft = F.log_softmax(output_rot,dim=1)
+                    loss = criterion(output,target_var) + torch.mean(-torch.sum(target_rot*soft,dim=1))
+                elif args.loss == 'mseloss':
+                    loss = criterion(output,target_var) + torch.sqrt(regression_loss(output_rot,target_rot))
+                
+                output, output_rot = output.float(), output_rot.float()
+                prec1 = accuracy(output.data, target_var)[0]
+                prec_rot = accuracy(output_rot.data,torch.argmax(target_rot,dim=1))[0]
+                loss.backward()
+                optimizer.step()
+                loss = loss.float()
+                acc.update(prec1.item(), input_var.size(0))    
+                acc_rot.update(prec_rot.item(),input_var.size(0))
+                losses.update(loss.item(), input_var.size(0))
+
+            elif augmentation == 24:
+                if noise == False:
+                    input_var,target_rot,target_var = rotation_loss.__dict__['joint_24'](input_var,target_var,major,location)
+                    optimizer.zero_grad()
+                    output, output_rot = model(input_var)
+                    loss = criterion(output,target_var) + criterion(output_rot,target_rot)
+                    output, output_rot = output.float(), output_rot.float()
+                    prec1 = accuracy(output.data, target_var)[0]
+                    prec_rot = accuracy(output_rot.data,torch.argmax(target_rot,dim=1))[0]
+                    acc_rot.update(prec_rot.item(),input_var.size(0))    
+                    loss.backward()
+                    optimizer.step()
+                    loss = loss.float()
+                    acc.update(prec1.item(), input_var.size(0))
+                    losses.update(loss.item(), input_var.size(0)) 
 
 
 
