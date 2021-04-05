@@ -4,14 +4,14 @@ import torch.utils as utils
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 import torchvision
-import prepare_for_dataset as pf
+import datasets
 import resnet
 import argparse
 import os
 import time
+import augmentations
 from augmentations import *
 import torch.nn.functional as F
-#from pdb import set_trace as bp
 import math
 
 model_names = sorted(name for name in resnet.__dict__
@@ -152,7 +152,7 @@ def main():
 
 
     
-    train_loader,val_loader = pf.__dict__[args.dataset](batch=args.batch_size)
+    train_loader,val_loader = datasets.__dict__[args.dataset](batch=args.batch_size)
     
 
     model = nn.DataParallel(resnet.__dict__[args.arch](num_classes=int(args.dataset[5:])))
